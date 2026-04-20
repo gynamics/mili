@@ -37,10 +37,13 @@ If you want to see the trace of evaluation/application, add `-DDEBUG` for enabli
 
 ## Evaluation
 Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
-- Everything mounted under a reference `env`, which is a list of frames.
+- All bindings are stored in environment, which is a list of frames.
   - Each frame is a list of bindings.
   - Each binding is a dotted pairs in form `(SYMBOL . VALUE)`.
-- The value of a symbol is always the first value found in DFS order on `env` list, otherwise `NIL`.
+- You can access the environment in Lisp, there is a variable `env`, which is a dotted pair,
+  - `(car env)` is head of the list, which is used as local environment.
+  - `(cdr env)` is tail of the list, which is used as global environment.
+- The value of a symbol is always the first value found in DFS order in the environment, otherwise `NIL`.
 - The value of `NIL` is `NIL`, this is a built-in type.
 - The value of `T` is `T`, this is a lexical binding that can be overriden.
 - An address always evaluates to itself.
@@ -50,7 +53,8 @@ Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
 ## 15 Primitives
 All primitives are lexical bindings that can be overriden.
 - `quote`: stop evaluation on its argument, `(quote)` evaluates to `NIL`.
-- `eval`: evaluation.
+- `eval`: evaluation. (see previous section)
+- `apply`: application. (see next section)
 - `car`: get object referred by pointer in upper half cell.
 - `cdr`: get object referred by pointer in lower half cell.
 - `cons`: make a new cell which associates two objects.
@@ -58,11 +62,11 @@ All primitives are lexical bindings that can be overriden.
 - `equal`: test whether two objects are the same.
 - `if`: evaluate its first argument, if it is `NIL`, return value of its third argument, otherwise return value of its second argument.
 - `atom`: test if its argument is an atom.
-- `set`: bind the value of its argument (which must be a symbol) to to the value of its second argument in current lexical scope.
-  It either create new lexical bindings in the top frame or modify existing bindings in place where it is found.
-  - There is a special usage: `(set 'SYMBOL VALUE . SCOPE)` can declare `SCOPE` protected, which restricts its behavior.
-- `define`: the same as `set`, but it only create new lexical bindings (in the top frame) and never override existing bindings.
+- `set`: bind the value of its argument (which must be a symbol) to to the value of its second argument in current lexical scope. It either create new lexical bindings in global environment (tail frame) or modify existing bindings in place.
+  - There is a special usage: `(set 'SYMBOL VALUE . SCOPE)` can declare `SCOPE` protected, which restricts its scope. This allows you to lift global environment temporarily.
+- `define`: the same as `set`, but it only create new bindings in local environment (head frame) and never override existing bindings.
 - `freeze`: get a copy of current environment, compress them in one frame.
+  - To save memory, use `(freeze SCOPE)` to make it stops copying at frame `SCOPE`, for example, `(freeze (cdr env))`
 - `+` `-` `*` `/` for integer arithmetics, accept one or more arguments, reduce from left to right.
 
 ## Application
@@ -74,6 +78,6 @@ Note that there is no `lambda` primitive, an applicative expresson should be in 
 - `BODY` is one or more S-expressions to be evaluated.
 - `ENV` is the lexical environment (optional), it should be a list of bindings, the same as a env frame.
 - For example,
-  - `(define 'add2 '(f (x) (+ x 2)))` is a function definition,
-  - `(define 'add2 (cons (f (x) (+ x 2)) (freeze)))` is a closure definition.
-  - `(define 'defun '(m (name params . body) (set 'name (cons (list 'f params body) (freeze)))))` is a macro definition..
+  - `(set 'add2 '((f (x) (+ x 2))))` is a function definition,
+  - `(set 'add2 (cons (f (x) (+ x 2)) (freeze (cdr env))))` is a closure definition.
+  - `(set 'lambda '((m (name params . body) (cons (list 'f params . body) (freeze (cdr env))))))` is a macro definition..
