@@ -87,18 +87,20 @@ Ref miliCdr(Ref x) {
 }
 
 #define HEAP_SIZE 4096
-static Node env;
 static Node heap[HEAP_SIZE];
 static int freelist[HEAP_SIZE];
 static int fltop;
 static uint8_t marked[HEAP_SIZE];
-
+static inline size_t heapPos(Ref x) { return LIST(x) - heap; }
 void mark(Ref x) {
-  if (!LIST_P(x) || marked[x])
-    return;
-  marked[x] = 1;
-  mark(CAR(x));
-  mark(CDR(x));
+  if (LIST_P(x)) {
+    size_t pos = heapPos(x);
+    if (!marked[pos]) {
+      marked[pos] += 1;
+      mark(CAR(x));
+      mark(CDR(x));
+    }
+  }
 }
 
 void sweep() {
@@ -106,14 +108,20 @@ void sweep() {
     if (!marked[i])
       freelist[fltop++] = i;
     else
-      marked[i] = 0;
+      marked[i] -= 1;
 }
 
-#define ENV ((Ref)(&env) | ((uintptr_t)REF_LIST << TAGPTR_BITS))
+#define ENV ((Ref)heap | ((uintptr_t)REF_LIST << TAGPTR_BITS))
 Ref miliCons(Ref car, Ref cdr) {
   if (fltop == 0) { // trigger GC only if no more free nodes
-    mark(CAR(ENV));
+#ifdef DEBUG
+    printf("\nGC triggered.\n\n");
+#endif
+    mark(ENV);
     sweep();
+#ifdef DEBUG
+    printf("\nGC: %d nodes collected.\n\n", fltop);
+#endif
     if (fltop == 0)
       fprintf(stderr, "Oops, heap is fully occupied!\n");
   }
@@ -145,58 +153,81 @@ Ref miliIntern(char *s) {
 }
 
 Ref miliApply(Ref fexp, Ref args);
-Ref miliPrint(Ref exp, Ref zip);
-Ref miliGet(Ref key, Ref scope) {
+Ref miliPrint(Ref exp);
+Ref miliGetLocal(Ref key) {
   Ref p, q;
-  for (p = CAR(ENV); p != scope; p = CDR(p))
+  for (p = CAR(ENV); p != miliCdr(CAR(ENV)); p = CDR(p))
     for (q = CAR(p); LIST_P(q); q = CDR(q))
       if (key == CAR(CAR(q)))
-        return q;
+        return CAR(q);
   return NIL;
+}
+
+Ref miliGet(Ref key) {
+  Ref p, q;
+  p =  miliGetLocal(key);
+  if (p == NIL) {
+    for (q = CDR(ENV); LIST_P(q); q = CDR(q))
+      if (key == CAR(CAR(q)))
+        return CAR(q);
+    return NIL;
+  } else return p;
 }
 
 Ref miliEval(Ref exp) {
 #ifdef DEBUG
-  printf("Eval "), miliPrint(exp, NIL);
-  printf(" :: type%d \n", getRefType(exp));
+  static int d = 0;
+  printf("Eval{%d} ", d++), miliPrint(exp);
+  printf(" :: type%d\n", getRefType(exp));
 #endif
+  Ref ret;
   switch (getRefType(exp)) {
   case REF_NIL:
-    return NIL;
+    ret = NIL;
+    break;
   case REF_LIST:
     if (NIL_P(CAR(exp)))
-      return NIL; // () => nil
+      ret = NIL; // () => nil
     else
-      return miliApply(miliEval(CAR(exp)), CDR(exp));
+      ret = miliApply(CAR(exp), CDR(exp));
+    break;
   case REF_SYMBOL:
-    return miliCdr(miliCar(miliGet(exp, NIL)));
+    ret = miliCdr(miliGet(exp));
+    break;
   case REF_ADDR:
-    return exp;
+    ret = exp;
+    break;
   default:
-    return errRef(ERR_EVAL);
+    ret = errRef(ERR_EVAL);
   }
+#ifdef DEBUG
+  printf("{%d} => ", --d), miliPrint(ret), printf("\n");
+#endif
+  return ret;
 }
 
-Ref miliSet(Ref key, Ref value, Ref scope) {
+Ref miliSet(Ref key, Ref value) {
   if (!testRefType(key, REF_SYMBOL))
     return errRef(ERR_TYPE);
-  Ref cell = miliGet(key, (scope == NIL) ? CDR(ENV) : scope);
+  Ref cell = miliGetLocal(key);
   if (NIL_P(cell))
-    CAR(CDR(ENV)) = miliCons(miliCons(key, value), CAR(CDR(ENV)));
+    CDR(ENV) = miliCons(miliCons(key, value), CDR(ENV));
   else
-    CDR(CAR(cell)) = value;
+    CDR(cell) = value;
   return value;
 }
 
-Ref miliDefine(Ref key, Ref value) {
+Ref miliDefine(Ref key, Ref value, Ref mut) {
   if (!testRefType(key, REF_SYMBOL))
     return errRef(ERR_TYPE);
-  Ref cell = miliGet(key, miliCdr(CAR(ENV)));
+  Ref cell = miliGetLocal(key);
   if (NIL_P(cell)) {
     CAR(CAR(ENV)) = miliCons(miliCons(key, value), CAR(CAR(ENV)));
     return value;
-  } else
-    return CDR(CAR(cell)); // never override existing dynamic bindings
+  } else if (NIL_P(mut))
+    return CDR(cell);
+  else
+    return (CDR(cell) = value);
 }
 
 Ref miliFreeze(Ref scope) {
@@ -212,36 +243,42 @@ Ref miliFreeze(Ref scope) {
   return n.cdr;
 }
 
-Ref miliApply(Ref f, Ref args) {
+Ref miliApply(Ref fexp, Ref args) {
 #ifdef DEBUG
-  printf("Apply "), miliPrint(f, NIL);
-  printf(" "), miliPrint(args, NIL), printf("\n");
+  printf("Apply "), miliPrint(fexp), printf(" "), miliPrint(args), printf("\n");
 #endif
+  Ref f = miliEval(fexp);
   switch (getRefType(f)) {
   case REF_ADDR:
     return ((Ref (*)(Ref))unRef(f))(args);
   case REF_LIST: {
-    unsigned long ftype = UINT(CAR(CAR(f)));
+    if (!LIST_P(f) || !LIST_P(CAR(f)) || !testRefType(CAR(CAR(f)), REF_SYMBOL))
+      return errRef(ERR_TYPE);
+    int ftype = UINT(CAR(CAR(f)));
     int macrop = (ftype == SYM_m);
     Ref p, q, r;
     r = CAR(ENV);
-    CAR(ENV) = miliCons(NIL, CAR(ENV));
-    /* lexical bindings */
-    for (p = CDR(f); LIST_P(p); p = CDR(p))
-      miliDefine(CAR(CAR(p)), CDR(CAR(p)));
+    if (ftype == SYM_t) // trampoline
+      CAR(ENV) = CDR(f);
+    else {
+      CAR(ENV) = miliCons(NIL, CAR(ENV));
+      /* lexical bindings */
+      for (p = CDR(f); LIST_P(p); p = CDR(p))
+        miliDefine(CAR(CAR(p)), CDR(CAR(p)), NIL);
+    }
     /* dynamic bindings */
-    for (p = CAR(CDR(CAR(f))), q = args; LIST_P(p) && LIST_P(q);
+    for (p = miliCar(CDR(CAR(f))), q = args; LIST_P(p) && LIST_P(q);
          p = CDR(p), q = CDR(q))
-      miliSet(CAR(p), macrop ? CAR(q) : miliEval(CAR(q)), r);
+      miliDefine(CAR(p), macrop ? CAR(q) : miliEval(CAR(q)), T);
     if (!NIL_P(p)) // dotted pairs?
-      miliSet(p, macrop ? q : miliEval(q), r);
+      miliDefine(p, macrop ? q : miliEval(q), T);
     /* eval body */
     for (q = CDR(CDR(CAR(f))); LIST_P(CDR(q)); q = CDR(q))
       miliEval(CAR(q));
     p = miliEval(CAR(q));
-    /* return */
-    CAR(ENV) = CDR(CAR(ENV));
-    return p;
+    /* there may be one dotted pair at the end of body, neglect it */
+    CAR(ENV) = r; // recover env
+    return p; // return the value of the last expression in body
   }
   default:
     return errRef(ERR_TYPE);
@@ -289,22 +326,16 @@ MILI_PRIM_1(freeze, miliFreeze)
 MILI_PRIM_2(equal, miliEqual)
 MILI_PRIM_2(cons, miliCons)
 
-/* Apply is special because it is also used for macros */
-Ref mili_apply(Ref exp) {
-  return miliApply(miliEval(miliCar(exp)), miliCar(miliCdr(exp)));
-}
-
 Ref mili_set(Ref exp) {
   Ref key = miliEval(miliCar(exp));
   Ref value = miliEval(miliCar(miliCdr(exp)));
-  Ref scope = miliEval(miliCdr(miliCdr(exp)));
-  return miliSet(key, value, scope);
+  return miliSet(key, value);
 }
 
 Ref mili_define(Ref exp) {
   Ref key = miliEval(miliCar(exp));
   Ref value = miliEval(miliCar(miliCdr(exp)));
-  return miliDefine(key, value);
+  return miliDefine(key, value, miliEval(miliCdr(miliCdr(exp))));
 }
 
 Ref mili_atom(Ref exp) {
@@ -419,37 +450,32 @@ Ref miliReadLine() {
   return root.car;
 }
 
-Ref miliFind(Ref value, Ref l) {
-  for (Ref j = l; LIST_P(j); j = CDR(j))
-    if (value == CAR(j))
-      return j;
-  return NIL;
-}
-
-Ref miliPrint(Ref value, Ref zip) {
+Ref miliPrintUm(Ref value) {
   switch (getRefType(value)) {
   case REF_NIL:
     printf("nil");
     break;
   case REF_LIST:
-    /* This can not prevent reentry a parent node, repeats may still exist. */
-    if (zip != NIL && miliFind(value, zip) != NIL) {
-      printf("*");
-      break;
-    }
-    Ref nz = miliCons(value, zip);
-    printf("(");
-    Ref p = value;
-    for (; LIST_P(CDR(p)); p = CDR(p)) {
-      miliPrint(CAR(p), nz);
-      printf(" ");
-    }
-    miliPrint(CAR(p), nz);
-    if (!NIL_P(CDR(p))) { // Dotted pairs
-      printf(" . ");
-      miliPrint(CDR(p), nz);
-    }
-    printf(")");
+    if (marked[heapPos(value)]) {
+      marked[heapPos(value)] -= 1; // entry once
+      printf("(");
+      Ref p = value;
+      miliPrintUm(CAR(p));
+      for (p = CDR(p); LIST_P(p); p = CDR(p)) {
+        printf(" ");
+        if (marked[heapPos(p)]) {
+          marked[heapPos(p)] -= 1; // entry once
+          miliPrintUm(CAR(p));
+        } else
+          printf("@[%#lx]", heapPos(value));
+      }
+      if (!NIL_P(p)) { // Dotted pairs
+        printf(" . ");
+        miliPrintUm(p);
+      }
+      printf(")");
+    } else
+      printf("@[%#lx]", heapPos(value));
     break;
   case REF_SYMBOL:
     printf("%s", miliSymbolName(value));
@@ -467,15 +493,20 @@ Ref miliPrint(Ref value, Ref zip) {
   return NIL;
 }
 
+Ref miliPrint(Ref value) {
+  mark(value);
+  return miliPrintUm(value);
+}
+
 void miliPrimitive(char *name, Ref (*f)(Ref)) {
-  miliDefine(miliIntern(name), makeRef((Ref)f, REF_ADDR));
+  miliSet(miliIntern(name), makeRef((Ref)f, REF_ADDR));
 }
 
 int main(int argc, char *argv[]) {
   /* Initialize heap */
   memset(marked, 0, sizeof(marked));
-  for (fltop = 0; fltop < HEAP_SIZE; fltop++)
-    freelist[fltop] = fltop;
+  for (fltop = 0; fltop < HEAP_SIZE - 1; fltop++)
+    freelist[fltop] = HEAP_SIZE - 1 - fltop;
   /* Initialize symbol table */
   symtbl[SYM_quote] = "quote";
   symtbl[SYM_t] = "t";
@@ -484,13 +515,13 @@ int main(int argc, char *argv[]) {
   symtbl[SYM_env] = "env";
   symcnt = SYMCNT;
   /* Initialize environment */
-  CAR(ENV) = CDR(ENV) = miliCons(NIL, NIL);
-  miliDefine(makeRef(SYM_env, REF_SYMBOL), makeRef(ENV, REF_LIST));
-  miliDefine(makeRef(SYM_t, REF_SYMBOL), makeRef(SYM_t, REF_SYMBOL));
+  CAR(ENV) = miliCons(NIL, NIL);
+  CDR(ENV) = NIL;
+  miliSet(makeRef(SYM_env, REF_SYMBOL), makeRef(ENV, REF_LIST));
+  miliSet(makeRef(SYM_t, REF_SYMBOL), makeRef(SYM_t, REF_SYMBOL));
 #define PRIM(name) miliPrimitive(#name, mili_##name)
   PRIM(quote);
   PRIM(eval);
-  PRIM(apply);
   PRIM(cons);
   PRIM(list);
   PRIM(car);
@@ -507,6 +538,6 @@ int main(int argc, char *argv[]) {
   miliPrimitive("/", mili_div);
   /* REPL */
   for (;;)
-    miliPrint(miliEval(miliReadLine()), NIL);
+    miliPrint(miliEval(miliReadLine()));
   return 0;
 }

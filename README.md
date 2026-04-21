@@ -43,41 +43,46 @@ Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
 - You can access the environment in Lisp, there is a variable `env`, which is a dotted pair,
   - `(car env)` is head of the list, which is used as local environment.
   - `(cdr env)` is tail of the list, which is used as global environment.
-- The value of a symbol is always the first value found in DFS order in the environment, otherwise `NIL`.
-- The value of `NIL` is `NIL`, this is a built-in type.
-- The value of `T` is `T`, this is a lexical binding that can be overriden.
+- The value of a symbol is always the first value found in DFS order in the environment, otherwise `nil`.
+- The value of `nil` is `nil`, this is a built-in type.
+- The value of `t` is `t`, this is a lexical binding that can be overriden.
 - An address always evaluates to itself.
 - Each non-primitive function call use a single frame pushed to the head of current `env` for storing all local bindings.
   When it returns, that frame is poped.
 
-## 15 Primitives
+## 16 Primitives
 All primitives are lexical bindings that can be overriden.
-- `quote`: stop evaluation on its argument, `(quote)` evaluates to `NIL`.
+- `quote`: stop evaluation on its argument, `(quote)` evaluates to `nil`.
 - `eval`: evaluation. (see previous section)
-- `apply`: application. (see next section)
 - `car`: get object referred by pointer in upper half cell.
 - `cdr`: get object referred by pointer in lower half cell.
 - `cons`: make a new cell which associates two objects.
 - `list`: construct a list, it also accepts `(list a b . c)` to construct a list ended with dotted pair.
-- `equal`: test whether two objects are the same.
-- `if`: evaluate its first argument, if it is `NIL`, return value of its third argument, otherwise return value of its second argument.
+- `equal`: test whether two objects are the same, return `t` if they're same, otherwise `nil`.
+- `if`: evaluate its first argument, if it is `nil`, return value of its third argument, otherwise return value of its second argument.
 - `atom`: test if its argument is an atom.
 - `set`: bind the value of its argument (which must be a symbol) to to the value of its second argument in current lexical scope. It either create new lexical bindings in global environment (tail frame) or modify existing bindings in place.
-  - There is a special usage: `(set 'SYMBOL VALUE . SCOPE)` can declare `SCOPE` protected, which restricts its scope. This allows you to lift global environment temporarily.
+ temporarily.
 - `define`: the same as `set`, but it only create new bindings in local environment (head frame) and never override existing bindings.
+  - There is a special usage: `(define 'SYMBOL VALUE . MUT)`, if `MUT` is non-nil, it will override existing bindings in local environment.
 - `freeze`: get a copy of current environment, compress them in one frame.
   - To save memory, use `(freeze SCOPE)` to make it stops copying at frame `SCOPE`, for example, `(freeze (cdr env))`
 - `+` `-` `*` `/` for integer arithmetics, accept one or more arguments, reduce from left to right.
 
 ## Application
 Note that there is no `lambda` primitive, an applicative expresson should be in form `((TAG PARAMS BODY ...) . ENV)`
-- `TAG` should be symbol `f` for function or `m` for macro.
-  - If it is a function, its arguments will be evaluated before bound to parameters.
-  - A macro is a function that does not evaluate its arguments.
+- `TAG` should be a symbol which specify type in:
+  - `t` for trampoline, a trampoline is a subroutine which is associated with a dirty frame.
+  - `f` for function, its arguments will be evaluated before bound to parameters.
+  - `m` for macro, a macro is a function that does not evaluate its arguments.
 - `PARAMS` is a list of parameters, it can be a list ended with dotted pairs.
 - `BODY` is one or more S-expressions to be evaluated.
 - `ENV` is the lexical environment (optional), it should be a list of bindings, the same as a env frame.
+  - Note that, since `env` is transparent, `ENV` form is not necessarily an independent copy, it can also be a data frame in global environment.
+    That also means, a trampoline can modify states in global environment, which can be dangerous.
+    Don't abuse `set` of `define` in a trampoline, this structure is designed for implementing tail-recursive subroutines.
 - For example,
-  - `(set 'add2 '((f (x) (+ x 2))))` is a function definition,
-  - `(set 'add2 (cons (f (x) (+ x 2)) (freeze (cdr env))))` is a closure definition.
-  - `(set 'lambda '((m (name params . body) (cons (list 'f params . body) (freeze (cdr env))))))` is a macro definition..
+  - `(set 'count '((t () (define 'x (+ x 1) . t)) ((x . 0))))` is a trampoline definition,
+    This define a function `count`, which has a inner counter variable only reachable in this function.
+  - `(set 'add2 (cons (f (x) (+ x 2)) (freeze (cdr env))))` is a function (closure) definition.
+  - `(set 'lambda '((m (params . body) (cons (list 'f params . body) (freeze (cdr env))))))` is a macro definition.
