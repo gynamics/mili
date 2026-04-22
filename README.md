@@ -1,9 +1,9 @@
 # MILI
 
 ## About
-A mini lisp interpreter in 500 lines.
+A mini lisp interpreter in about 500 lines.
 
-I've always wanted to write a simple but not too crude Lisp implementation in C, but I just didn't have spare time for it. Recently I figured it out in two nights, that's all.
+I've always wanted to write a simple Lisp implementation in C, but I just didn't have spare time for it. Recently I figured it out in two nights, that's all.
 
 In this implementation there is only one compound data structure: the list node. So you can almost observe everything in Lisp. However, it is not that friendly to debugging.
 
@@ -34,6 +34,7 @@ If you want to see the trace of evaluation/application, add `-DDEBUG` for enabli
 - `' SEXP` for quote expression construction
 - `. SEXP` for dotted pair construction
 - ` \v\t\n` for diliminators
+- Case sensitive
 
 ## Evaluation
 Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
@@ -41,9 +42,10 @@ Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
   - Each frame is a list of bindings.
   - Each binding is a dotted pairs in form `(SYMBOL . VALUE)`.
 - You can access the environment in Lisp, there is a variable `env`, which is a dotted pair,
-  - `(car env)` is head of the list, which is used as local environment.
-  - `(cdr env)` is tail of the list, which is used as global environment.
-- The value of a symbol is always the first value found in DFS order in the environment, otherwise `nil`.
+  - `(car env)` is head of a list of frames, this is called local environment.
+  - `(cdr env)` is a single frame, which is called called global environment.
+- The value of a symbol is always the first value found in the environment, otherwise `nil`.
+  The searching order (scoping rule) is firstly searching local environment from head to tail, then search global environment.
 - The value of `nil` is `nil`, this is a built-in type.
 - The value of `t` is `t`, this is a lexical binding that can be overriden.
 - An address always evaluates to itself.
@@ -61,12 +63,12 @@ All primitives are lexical bindings that can be overriden.
 - `equal`: test whether two objects are the same, return `t` if they're same, otherwise `nil`.
 - `if`: evaluate its first argument, if it is `nil`, return value of its third argument, otherwise return value of its second argument.
 - `atom`: test if its argument is an atom.
-- `set`: bind the value of its argument (which must be a symbol) to to the value of its second argument in current lexical scope. It either create new lexical bindings in global environment (tail frame) or modify existing bindings in place.
+- `set`: bind the value of its first argument (which must be a symbol) to to the value of its second argument in current lexical scope. It either create new lexical bindings in global environment (tail frame) or modify existing bindings in place.
  temporarily.
-- `define`: the same as `set`, but it only create new bindings in local environment (head frame) and never override existing bindings.
+- `define`: the same as `set`, but it only create new bindings in local environment (head frame) and never override existing bindings. However, `define` may shadow bindings in its parent environments and global environment, because its scope is restricted in local environments.
   - There is a special usage: `(define 'SYMBOL VALUE . MUT)`, if `MUT` is non-nil, it will override existing bindings in local environment.
 - `freeze`: get a copy of current environment, compress them in one frame.
-  - To save memory, use `(freeze SCOPE)` to make it stops copying at frame `SCOPE`, for example, `(freeze (cdr env))`
+  - To save memory, use `(freeze SCOPE)` to make it stops copying at frame `SCOPE`, for example, `(freeze (cdr (car env)))`
 - `+` `-` `*` `/` for integer arithmetics, accept one or more arguments, reduce from left to right.
 
 ## Application
@@ -84,5 +86,5 @@ Note that there is no `lambda` primitive, an applicative expresson should be in 
 - For example,
   - `(set 'count '((t () (define 'x (+ x 1) . t)) ((x . 0))))` is a trampoline definition,
     This define a function `count`, which has a inner counter variable only reachable in this function.
-  - `(set 'add2 (cons (f (x) (+ x 2)) (freeze (cdr env))))` is a function (closure) definition.
-  - `(set 'lambda '((m (params . body) (cons (list 'f params . body) (freeze (cdr env))))))` is a macro definition.
+  - `(set 'add2 (list (f (x) (+ x 2))))` is a function definition (with empty capture).
+  - `(set 'lambda '((m (params . body) (cons (list 'f params . body) (freeze)))))` is a macro definition.
