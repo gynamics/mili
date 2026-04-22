@@ -89,3 +89,22 @@ Note that there is no `lambda` primitive, an applicative expresson should be in 
     This define a function `count`, which has a inner counter variable only reachable in this function.
   - `(set 'add2 (list (f (x) (+ x 2))))` is a function definition (with empty capture).
   - `(set 'lambda '((m (params . body) (cons (list 'f params . body) (freeze)))))` is a macro definition.
+
+## Examples
+
+``` lisp
+(set 'defmacro '((m (name params . body) (set name (list (list 'm params . body))))))
+(defmacro lambda (params . body) (cons (list 'f params . body) (freeze)))
+(defmacro defun (name params . body) (set name (eval (list 'lambda params . body))))
+(defmacro defsub (name params . body) (set name (list (list 'f params . body))))
+(defsub caar (l) (car (car l)))
+(defsub cadr (l) (car (cdr l)))
+(defsub cdar (l) (cdr (car l)))
+(defsub cddr (l) (cdr (cdr l)))
+(defsub last (l) (if (cdr l) (last (cdr l)) (car l)))
+(defsub mapcar (f l) (if l (cons (f (car l)) (mapcar f (cdr l))) nil))
+(defsub reduce (f i l) (if l (reduce f ((eval f) i (car l)) (cdr l)) i))
+(mapcar (lambda (x) (+ 1 x)) '(1 2 3 4))
+(defmacro call-with-tco (f . args) (define f (list (list 't (car (cdar (eval f))) (cadr (cdar (eval f))))) . t) (define f (cons (car (eval f)) (car env)) . t) (eval (cons f args)))
+(call-with-tco mapcar (lambda (x) (+ 1 x)) '(1 2 3 4))
+```
