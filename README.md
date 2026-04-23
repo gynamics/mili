@@ -19,7 +19,7 @@ If you want to see the trace of evaluation/application, add `-DDEBUG` for enabli
 ## Features
 - `getline`-based REPL, evaluate line by line, no waiting.
   For each line, only the first sexp is read and evaluated, following things will be neglected.
-- Use 5-bit pointer tagging (actually only 3 bits used), 2 bits reserved.
+- Use 5-bit pointer tagging (3 type bits, 2 mark bits).
 - Use C call stack for recursion, may overflow on very deep recursion.
 - Fixed size (8K) stack only for protecting references in GC.
 - Fixed size (8K) string table, symbol strings are never freed.

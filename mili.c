@@ -17,7 +17,6 @@ typedef uintptr_t Ref;
 #define TAGPTR_MASK (~TAG_MASK)
 #define TAGTYPE_BITS 3
 #define TAGTYPE_MASK (TAG_MASK ^ (TAG_MASK << TAGTYPE_BITS))
-
 typedef enum {
   REF_NIL,
   REF_LIST,
@@ -27,13 +26,13 @@ typedef enum {
 } RefType;
 
 static inline Ref makeRef(Ref ptr, RefType type) {
-  return (Ref)((ptr & TAGPTR_MASK) | ((uintptr_t)type << TAGPTR_BITS));
+  return (Ref)((ptr & ~TAGTYPE_MASK) | ((uintptr_t)type << TAGPTR_BITS));
 }
 
 static inline void *unRef(Ref ref) { return (void *)(ref & TAGPTR_MASK); }
 
 #define STACK_SIZE 1024
-static Ref fret; // function return value
+static volatile Ref fret; // function return value
 static Ref stack[STACK_SIZE];
 static int sp;
 static inline void miliPush(Ref v) { stack[++sp] = v; }
@@ -109,50 +108,70 @@ Ref miliCdr(Ref x) {
   }
 }
 
+#define TAGMARK_BITS 2
+#define TAGMARK_OFFSET (TAGPTR_BITS + TAGTYPE_BITS)
+#define TAGMARK_MASK (TAG_MASK << TAGTYPE_BITS)
+typedef enum {
+  MARK_00,
+  MARK_01,
+  MARK_10,
+  MARK_11,
+} MarkType;
+static inline void setMark(List l, MarkType m) {
+  l->car = ((l->car & ~TAGMARK_MASK) | ((uintptr_t)m << TAGMARK_OFFSET));
+}
 #define HEAP_SIZE 4096
 static Node heap[HEAP_SIZE];
-static int freelist[HEAP_SIZE];
-static int fltop;
-static uint8_t marked[HEAP_SIZE];
+static volatile List freelist;
 static inline size_t heapPos(Ref x) { return LIST(x) - heap; }
+int testMark(int x, MarkType m) {
+  return (((uintptr_t)heap[x].car >> TAGMARK_OFFSET) == m);
+}
 void mark(Ref x) {
   if (LIST_P(x)) {
     size_t pos = heapPos(x);
-    if (!marked[pos]) {
-      marked[pos] += 1;
-      mark(CAR(x));
-      mark(CDR(x));
-    } else
-      marked[pos] += 1;
+    if (!testMark(pos, MARK_11)) {
+      if (testMark(pos, MARK_01))
+        setMark(LIST(x), MARK_11);
+      else {
+        setMark(LIST(x), MARK_01);
+        mark(CAR(x));
+        mark(CDR(x));
+      }
+    }
   }
 }
 
 #define ENV ((Ref)(heap) | ((uintptr_t)REF_LIST << TAGPTR_BITS))
 void miliGC() {
 #ifdef DEBUG
-  printf("\nGC triggered.\n\n");
+  int count = 0;
+  printf("\nGC triggered.\n");
 #endif
   mark(fret);
   mark(ENV);
   for (int i = sp; i >= 0; --i)
     mark(stack[i]);
-#ifdef DEBUG
-  printf("\nGC: %d nodes collected.\n\n", fltop);
-#endif
-  if (fltop == 0)
-    fprintf(stderr, "Oops, heap is fully occupied!\n");
-  // sweep
   for (int i = 0; i < HEAP_SIZE; i++)
-    if (!marked[i])
-      freelist[fltop++] = i;
-    else
-      marked[i] = 0;
+    if (testMark(i, MARK_00)) { // recycle nodes
+      setMark((List)&heap[i], MARK_00);
+      heap[i].cdr = (Ref)freelist;
+      freelist = &heap[i];
+#ifdef DEBUG
+      ++count;
+#endif
+    } else
+      setMark((List)&heap[i], MARK_00);
+#ifdef DEBUG
+  printf("\nGC end, %d nodes recycled.\n", count);
+#endif
 }
 
 void _miliCons() {
-  if (fltop < HEAP_SIZE / 2) // trigger GC
+  if (freelist == NIL) // freelist expired, trigger GC
     miliGC();
-  List x = &heap[freelist[--fltop]];
+  List x = freelist;
+  freelist = (List)freelist->cdr;
   x->car = V(0);
   x->cdr = V(1);
   fret = makeRef((Ref)x, REF_LIST);
@@ -561,8 +580,8 @@ Ref miliReadLine() {
 
 Ref miliPrintValue(Ref value);
 Ref miliPrintList(Ref l) {
-  if (marked[heapPos(l)]) {
-    marked[heapPos(l)] = 0;
+  if (!testMark(heapPos(l), MARK_00)) {
+    setMark(LIST(l), MARK_00);
     miliPrintValue(CAR(l));
     if (LIST_P(CDR(l)))
       printf(" "), miliPrintList(CDR(l));
@@ -579,7 +598,7 @@ Ref miliPrintValue(Ref value) {
     printf("nil");
     break;
   case REF_LIST:
-    if (marked[heapPos(value)] > 1)
+    if (testMark(heapPos(value), MARK_11))
       printf("#%#lx=", heapPos(value));
     printf("(");
     miliPrintList(value);
@@ -611,9 +630,11 @@ int main(int argc, char *argv[]) {
   /* Initialize stack */
   sp = -1;
   /* Initialize heap */
-  for (fltop = 0; fltop < HEAP_SIZE - 1; fltop++)
-    freelist[fltop] = HEAP_SIZE - 1 - fltop;
-  memset(marked, 0, sizeof(marked));
+  freelist = (List)NIL;
+  for (int i = HEAP_SIZE - 1; i > 0; --i) {
+    heap[i].cdr = (Ref)freelist;
+    freelist = &heap[i];
+  }
   /* Initialize symbol table */
   symtbl[SYM_quote] = "quote";
   symtbl[SYM_t] = "t";
