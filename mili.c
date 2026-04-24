@@ -127,7 +127,8 @@ static inline size_t heapPos(Ref x) { return LIST(x) - heap; }
 int testMark(int x, MarkType m) {
   return (((uintptr_t)heap[x].car >> TAGMARK_OFFSET) == m);
 }
-void mark(Ref x) {
+/** 00 => no ref; 01 => strong ref; 11 => weak ref */
+void markTree(Ref x) {
   if (LIST_P(x)) {
     size_t pos = heapPos(x);
     if (!testMark(pos, MARK_11)) {
@@ -135,8 +136,8 @@ void mark(Ref x) {
         setMark(LIST(x), MARK_11);
       else {
         setMark(LIST(x), MARK_01);
-        mark(CAR(x));
-        mark(CDR(x));
+        markTree(CAR(x));
+        markTree(CDR(x));
       }
     }
   }
@@ -148,13 +149,12 @@ void miliGC() {
   int count = 0;
   printf("\nGC triggered.\n");
 #endif
-  mark(fret);
-  mark(ENV);
+  markTree(fret);
+  markTree(ENV);
   for (int i = sp; i >= 0; --i)
-    mark(stack[i]);
+    markTree(stack[i]);
   for (int i = 0; i < HEAP_SIZE; i++)
-    if (testMark(i, MARK_00)) { // recycle nodes
-      setMark((List)&heap[i], MARK_00);
+    if (!testMark(i, MARK_00)) { // recycle nodes
       heap[i].cdr = (Ref)freelist;
       freelist = &heap[i];
 #ifdef DEBUG
@@ -201,7 +201,7 @@ Ref miliIntern(char *s) {
 
 Ref miliGetLocal(Ref key) {
   Ref p, q;
-  for (p = CAR(ENV); p != miliCdr(CAR(ENV)); p = CDR(p))
+  for (p = CAR(ENV); LIST_P(p); p = CDR(p))
     for (q = CAR(p); LIST_P(q); q = CDR(q))
       if (key == CAR(CAR(q)))
         return CAR(q);
@@ -583,7 +583,7 @@ Ref miliPrintList(Ref l) {
   if (!testMark(heapPos(l), MARK_00)) {
     setMark(LIST(l), MARK_00);
     miliPrintValue(CAR(l));
-    if (LIST_P(CDR(l)))
+    if (LIST_P(CDR(l)) && !testMark(heapPos(CDR(l)), MARK_11))
       printf(" "), miliPrintList(CDR(l));
     else if (!NIL_P(CDR(l)))
       printf(" . "), miliPrintValue(CDR(l));
@@ -598,11 +598,12 @@ Ref miliPrintValue(Ref value) {
     printf("nil");
     break;
   case REF_LIST:
-    if (testMark(heapPos(value), MARK_11))
-      printf("#%#lx=", heapPos(value));
-    printf("(");
-    miliPrintList(value);
-    printf(")");
+    if (!testMark(heapPos(value), MARK_00)) {
+      if (testMark(heapPos(value), MARK_11))
+        printf("#%#lx=", heapPos(value));
+      printf("("), miliPrintList(value), printf(")");
+    } else
+      printf("#%#lx#", heapPos(value));
     break;
   case REF_SYMBOL:
     printf("%s", miliSymbolName(value));
@@ -620,7 +621,7 @@ Ref miliPrintValue(Ref value) {
   return NIL;
 }
 
-Ref miliPrint(Ref value) { return mark(value), miliPrintValue(value); }
+Ref miliPrint(Ref value) { return markTree(value), miliPrintValue(value); }
 
 void miliPrimitive(char *name, Ref (*f)(Ref)) {
   miliSet(miliIntern(name), makeRef((Ref)f, REF_ADDR));
