@@ -552,9 +552,21 @@ char *miliParse(char *line, List parent, int limit) {
         x = makeRef((Ref)strtoul(line, &line, 0), REF_ADDR);
       else {
         char *bgn = line;
-        for (line++; !strchr(reschars, *line); line++)
-          ;
-        char *s = strndup(bgn, (int)(line - bgn));
+        char *s;
+        if (*line == '|') {
+          int len = 0;
+          for (line++; *line != '\0'; line++, len++)
+            if (*line == '|' && *++line != '|')
+              break;
+          s = malloc(len * sizeof(char));
+          s[len - 1] = '\0';
+          for (char *p = s; bgn < line; *p++ = *bgn++)
+            if (*bgn == '|') bgn++;
+        } else {
+          for (line++; *line != '\0' && !strchr(reschars, *line); line++)
+            ;
+          s = strndup(bgn, (int)(line - bgn));
+        }
         x = miliIntern(s);
         free(s);
       }

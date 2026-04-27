@@ -35,7 +35,7 @@ If you want to see the trace of evaluation/application, add `-DDEBUG` for enabli
 - `' SEXP` for quote expression construction
 - `. SEXP` for dotted pair construction
 - ` \v\t\n` for diliminators
-- Case sensitive
+- Special symbols can be defined with `|...|` where `...` can contain arbitrary characters, a single `|` can be escaped with `||`.
 
 ## Evaluation
 Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
