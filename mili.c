@@ -1,6 +1,6 @@
 /** mili.c: MIni LIsp in C
  *
- * A Scheme-style Lisp implementation in about 650 lines.
+ * A Scheme-style Lisp implementation in about 700 lines.
  *
  * CopyRevolted 2026 by gynamics
  */
@@ -56,13 +56,14 @@ typedef enum {
 } ErrType;
 
 Ref miliPrint(Ref exp);
-static inline Ref errRef(ErrType err) {
-  printf("Error %d\n", err);
+static inline Ref errRef(ErrType err, char *errname, int n) {
+  printf("Error %s @ line %d\n", errname, n);
   printf("Call Trace:\n");
   for (int i = sp; i > 0 && sp - i < 8; i--)
     printf("%d: ", i), miliPrint(stack[i]), printf("\n");
   return (Ref)(((uintptr_t)REF_ERROR << TAGPTR_BITS) | (uintptr_t)err);
 }
+#define ERRREF(err) errRef(err, #err, __LINE__)
 
 static inline RefType getRefType(Ref ref) {
   return (RefType)((ref & TAGTYPE_MASK) >> (TAGPTR_BITS));
@@ -93,7 +94,7 @@ Ref miliCar(Ref x) {
   case REF_LIST:
     return CAR(x);
   default:
-    return errRef(ERR_TYPE);
+    return ERRREF(ERR_TYPE);
   }
 }
 
@@ -104,7 +105,7 @@ Ref miliCdr(Ref x) {
   case REF_LIST:
     return CDR(x);
   default:
-    return errRef(ERR_TYPE);
+    return ERRREF(ERR_TYPE);
   }
 }
 
@@ -200,6 +201,14 @@ Ref miliIntern(char *s) {
 }
 
 Ref miliGetLocal(Ref key) {
+  Ref q;
+  for (q = miliCar(CAR(ENV)); LIST_P(q); q = CDR(q))
+    if (key == CAR(CAR(q)))
+      return CAR(q);
+  return NIL;
+}
+
+Ref miliGetTemp(Ref key) {
   Ref p, q;
   for (p = CAR(ENV); LIST_P(p); p = CDR(p))
     for (q = CAR(p); LIST_P(q); q = CDR(q))
@@ -210,7 +219,7 @@ Ref miliGetLocal(Ref key) {
 
 Ref miliGet(Ref key) {
   Ref p, q;
-  p = miliGetLocal(key);
+  p = miliGetTemp(key);
   if (p == NIL) {
     for (q = CDR(ENV); LIST_P(q); q = CDR(q))
       if (key == CAR(CAR(q)))
@@ -246,7 +255,7 @@ void _miliEval() {
     fret = exp;
     break;
   default:
-    fret = errRef(ERR_EVAL);
+    fret = ERRREF(ERR_EVAL);
   }
 #undef exp
 #ifdef DEBUG
@@ -259,9 +268,9 @@ void _miliSet() {
 #define key V(0)
 #define value V(1)
   if (!testRefType(key, REF_SYMBOL))
-    fret = errRef(ERR_TYPE);
+    fret = ERRREF(ERR_TYPE);
   else {
-    Ref cell = miliGetLocal(key);
+    Ref cell = miliGetTemp(key);
     if (NIL_P(cell))
       CDR(ENV) = miliCons(miliCons(key, value), CDR(ENV));
     else
@@ -280,7 +289,7 @@ void _miliDefine() {
 #define value V(1)
 #define mut V(2)
   if (!testRefType(key, REF_SYMBOL))
-    fret = errRef(ERR_TYPE);
+    fret = ERRREF(ERR_TYPE);
   else {
     Ref cell = miliGetLocal(key);
     if (NIL_P(cell)) {
@@ -322,10 +331,12 @@ Ref miliFreeze(Ref scope) { return miliCall_1(_miliFreeze, scope), fret; }
 void _miliApply() {
   miliPush(NIL);
   miliPush(NIL);
+  miliPush(NIL);
 #define f V(0)
 #define l V(1)
-#define fexp V(2)
-#define args V(3)
+#define x V(2)
+#define fexp V(3)
+#define args V(4)
 #ifdef DEBUG
   printf("Apply "), miliPrint(fexp), printf(" "), miliPrint(args), printf("\n");
 #endif
@@ -337,23 +348,26 @@ void _miliApply() {
   case REF_LIST: {
     if (!LIST_P(f) || !LIST_P(CAR(f)) ||
         !testRefType(CAR(CAR(f)), REF_SYMBOL)) {
-      fret = errRef(ERR_TYPE);
+      fret = ERRREF(ERR_TYPE);
       break;
     }
     int ftype = UINT(CAR(CAR(f)));
     Ref p, q, r;
     if (ftype != SYM_m) { // if it is not a macro, evaluate arguments first
       l = miliCons(NIL, NIL);
-      for (p = l, q = args; LIST_P(q); p = CDR(p), q = CDR(q))
-        CDR(p) = miliCons(miliEval(CAR(q)), NIL);
+      for (p = l, q = args; LIST_P(q); p = CDR(p), q = CDR(q)) {
+        x = miliEval(CAR(q));
+        CDR(p) = miliCons(x, NIL);
+      }
       if (!NIL_P(q))
         CDR(p) = miliEval(q);
       args = CDR(l);
     }
     r = CAR(ENV);
-    if (ftype == SYM_t) // trampoline
-      CAR(ENV) = CDR(f);
-    else {
+    if (ftype == SYM_t) { // trampoline
+      if (CDR(f))
+        CAR(ENV) = CDR(f);
+    } else {
       CAR(ENV) = miliCons(NIL, CAR(ENV));
       /* lexical bindings */
       for (p = CDR(f); LIST_P(p); p = CDR(p))
@@ -374,13 +388,15 @@ void _miliApply() {
     break;        // return the value of the last expression in body
   }
   default:
-    fret = errRef(ERR_TYPE);
+    fret = ERRREF(ERR_TYPE);
     break;
   }
+  miliPop(); // x
   miliPop(); // l
   miliPop(); // f
 #undef fexp
 #undef args
+#undef x
 #undef l
 #undef f
 }
@@ -415,7 +431,7 @@ void _miliEqual() {
     case REF_SYMBOL:
       fret = (UINT(x) == UINT(y)) ? NIL : T;
     default:
-      fret = errRef(ERR_TYPE);
+      fret = ERRREF(ERR_TYPE);
     };
 #undef x
 #undef y
@@ -487,25 +503,26 @@ Ref mili_list(Ref exp) {
 }
 
 Ref mili_if(Ref exp) {
-  return miliEval((NIL_P(miliEval(CAR(exp)))) ? CAR(CDR(CDR(exp)))
-                                              : CAR(CDR(exp)));
+  return miliEval((NIL_P(miliEval(miliCar(exp))))
+                      ? miliCar(miliCdr(miliCdr(exp)))
+                      : miliCar(miliCdr(exp)));
 }
 
 #define MILI_ARITHMETICS(op)                                                   \
   if (LIST_P(exp)) {                                                           \
     Ref x = miliEval(CAR(exp));                                                \
     if (!testRefType(x, REF_ADDR))                                             \
-      return errRef(ERR_TYPE);                                                 \
+      return ERRREF(ERR_TYPE);                                                 \
     unsigned long res = UINT(x);                                               \
     for (Ref j = CDR(exp); LIST_P(j); j = CDR(j)) {                            \
       x = miliEval(CAR(j));                                                    \
       if (!testRefType(x, REF_ADDR))                                           \
-        return errRef(ERR_TYPE);                                               \
+        return ERRREF(ERR_TYPE);                                               \
       res op## = UINT(x);                                                      \
     }                                                                          \
     return makeRef((Ref)res, REF_ADDR);                                        \
   } else                                                                       \
-    return errRef(ERR_TYPE)
+    return ERRREF(ERR_TYPE)
 
 Ref mili_add(Ref exp) { MILI_ARITHMETICS(+); }
 Ref mili_sub(Ref exp) { MILI_ARITHMETICS(-); }
@@ -561,7 +578,8 @@ char *miliParse(char *line, List parent, int limit) {
           s = malloc(len * sizeof(char));
           s[len - 1] = '\0';
           for (char *p = s; bgn < line; *p++ = *bgn++)
-            if (*bgn == '|') bgn++;
+            if (*bgn == '|')
+              bgn++;
         } else {
           for (line++; *line != '\0' && !strchr(reschars, *line); line++)
             ;

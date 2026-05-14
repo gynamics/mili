@@ -1,7 +1,7 @@
 # MILI
 
 ## About
-A mini lisp interpreter in about 500 lines.
+A mini Lisp interpreter in about 700 lines.
 
 I've always wanted to write a simple Lisp implementation in C, but I just didn't have spare time for it. Recently I figured it out in two nights, that's all.
 
@@ -24,7 +24,7 @@ If you want to see the trace of evaluation/application, add `-DDEBUG` for enabli
 - Fixed size (8K) stack only for protecting references in GC.
 - Fixed size (8K) string table, symbol strings are never freed.
 - Fixed size (64K) memory pool with mark-and-sweep GC.
-- No strict type check yet, a wrong sentence may cause it crash.
+- No strict built-in type check yet, a wrong sentence may cause it crash.
 
 ## Syntax
 - An `SEXP` is a list or an atom
@@ -84,6 +84,7 @@ Note that there is no `lambda` primitive, an applicative expresson should be in 
   - Note that, since `env` is transparent, `ENV` form is not necessarily an independent copy, it can also be a data frame in global environment.
     That also means, a trampoline can modify states in global environment, which can be dangerous.
     Don't abuse `set` of `define` in a trampoline, this structure is designed for implementing tail-recursive subroutines.
+  - If the `ENV` of a trampoline is empty, it falls to its parent frame by default.
 - For example,
   - `(set 'count '((t () (define 'x (+ x 1) . t)) ((x . 0))))` is a trampoline definition,
     This define a function `count`, which has a inner counter variable only reachable in this function.
@@ -102,9 +103,16 @@ Note that there is no `lambda` primitive, an applicative expresson should be in 
 (defsub cdar (l) (cdr (car l)))
 (defsub cddr (l) (cdr (cdr l)))
 (defsub last (l) (if (cdr l) (last (cdr l)) (car l)))
-(defsub mapcar (f l) (if l (cons (f (car l)) (mapcar f (cdr l))) nil))
-(defsub reduce (f i l) (if l (reduce f ((eval f) i (car l)) (cdr l)) i))
+(defsub prog2 (s1 s2) s2)
+(defsub progn (s . body) (if body (last body) s))
+(defmacro let* (binds . body) (if binds (prog2 (eval (list 'define (list 'quote (caar binds)) (car (cdar binds)) . t)) (eval (list 'let* (cdr binds) . body))) (eval (cons 'progn body))))
+(let* ((x 2) (y 3)) (+ x y) (- y x))
+(defsub mapcar (f l) (if l (cons (f (car l)) (mapcar f (cdr l)))))
 (mapcar (lambda (x) (+ 1 x)) '(1 2 3 4))
 (defmacro call-with-tco (f . args) (define f (list (list 't (car (cdar (eval f))) (cadr (cdar (eval f))))) . t) (define f (cons (car (eval f)) (car env)) . t) (eval (cons f args)))
 (call-with-tco mapcar (lambda (x) (+ 1 x)) '(1 2 3 4))
+(defsub qdef (b) (list 'define (list 'quote (car b)) (cadr b) . t))
+(defmacro let (binds . body) (eval (cons 'list (mapcar qdef binds))) (eval (cons 'progn body)))
+(let ((x 2) (y 3)) (/ x y) (* y x))
+(defsub reduce (f i l) (if l (reduce f ((eval f) i (car l)) (cdr l)) i))
 ```
