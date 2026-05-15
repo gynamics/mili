@@ -116,3 +116,8 @@ Note that there is no `lambda` primitive, an applicative expresson should be in 
 (let ((x 2) (y 3)) (/ x y) (* y x))
 (defsub reduce (f i l) (if l (reduce f ((eval f) i (car l)) (cdr l)) i))
 ```
+
+## Request For Evaluations
+- [ ] Should we support pointer operations? (e. g. `read-long` and `write-long`) Note that currently there is no data type for holding a 64-bit value.
+- [ ] Mili is a simple but flexible object system, it is possible to implement generic reader/writer for it, but there is no `array` or `struct` type currently. Should we make `array` a primitive type? Or, `struct` may be better for C integration? Both can represent data structures, `array` is more friendly to Linux uAPI, while `struct` is more suitable for generic object representation.
+- [ ] Currently, mili does not have a complete virtual machine. Its stack is only used for protecting references from GC. That means, the evaluation of MILI is driven by C function recursion, and temporary variables are still stored on C function stack, which makes it hard to implement first-class continuation for it. To implement `call/cc`, the evaluation must be driven by iteration, so that the whole execution chain can be freezed by `freeze` as a list array. Compared to `call/cc`, something like racket's `shift` and `reset` may be better.
