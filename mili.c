@@ -545,9 +545,11 @@ char *miliParse(char *line, List parent, int limit) {
   })
 
   while (*line != '\0' && limit-- != 0) {
-    while (strchr(wsp, *line))
+    while (*line != '\0' && strchr(wsp, *line))
       line++;
-    if (*line == '\'') {
+    if (*line == '\0')
+      break;
+    else if (*line == '\'') {
       x = miliCons(makeRef((Ref)SYM_quote, REF_SYMBOL), NIL);
       SHIFT(x);
       line++;
