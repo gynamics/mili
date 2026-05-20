@@ -180,6 +180,8 @@ void _miliCons() {
 Ref miliCons(Ref car, Ref cdr) { return miliCall_2(_miliCons, car, cdr), fret; }
 
 typedef enum {
+  SYM_backquote,
+  SYM_comma,
   SYM_quote,
   SYM_t,
   SYM_m,
@@ -549,7 +551,15 @@ char *miliParse(char *line, List parent, int limit) {
       line++;
     if (*line == '\0')
       break;
-    else if (*line == '\'') {
+    else if (*line == '`') {
+      x = miliCons(makeRef((Ref)SYM_backquote, REF_SYMBOL), NIL);
+      SHIFT(x);
+      line++;
+      line = miliParse(line, LIST(x), 1);
+    } else if (*line == ',') {
+      SHIFT(makeRef((Ref)SYM_comma, REF_SYMBOL));
+      line++;
+    } else if (*line == '\'') {
       x = miliCons(makeRef((Ref)SYM_quote, REF_SYMBOL), NIL);
       SHIFT(x);
       line++;
@@ -669,7 +679,9 @@ int main(int argc, char *argv[]) {
     freelist = &heap[i];
   }
   /* Initialize symbol table */
+  symtbl[SYM_backquote] = "backquote";
   symtbl[SYM_quote] = "quote";
+  symtbl[SYM_comma] = ",";
   symtbl[SYM_t] = "t";
   symtbl[SYM_m] = "m";
   symtbl[SYM_f] = "f";
@@ -680,19 +692,18 @@ int main(int argc, char *argv[]) {
   CDR(ENV) = NIL;
   miliSet(makeRef(SYM_env, REF_SYMBOL), makeRef(ENV, REF_LIST));
   miliSet(makeRef(SYM_t, REF_SYMBOL), makeRef(SYM_t, REF_SYMBOL));
-#define PRIM(name) miliPrimitive(#name, mili_##name)
-  PRIM(quote);
-  PRIM(eval);
-  PRIM(cons);
-  PRIM(list);
-  PRIM(car);
-  PRIM(cdr);
-  PRIM(equal);
-  PRIM(if);
-  PRIM(atom);
-  PRIM(set);
-  PRIM(define);
-  PRIM(freeze);
+  miliPrimitive("quote", mili_quote);
+  miliPrimitive("eval", mili_eval);
+  miliPrimitive("cons", mili_cons);
+  miliPrimitive("list", mili_list);
+  miliPrimitive("car", mili_car);
+  miliPrimitive("cdr", mili_cdr);
+  miliPrimitive("equal", mili_equal);
+  miliPrimitive("if", mili_if);
+  miliPrimitive("atom", mili_atom);
+  miliPrimitive("set", mili_set);
+  miliPrimitive("define", mili_define);
+  miliPrimitive("freeze", mili_freeze);
   miliPrimitive("+", mili_add);
   miliPrimitive("-", mili_sub);
   miliPrimitive("*", mili_mul);

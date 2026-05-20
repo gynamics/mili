@@ -36,6 +36,7 @@ If you want to see the trace of evaluation/application, add `-DDEBUG` for enabli
 - `. SEXP` for dotted pair construction
 - ` \v\t\n` for diliminators
 - Special symbols can be defined with `|...|` where `...` can contain arbitrary characters, a single `|` can be escaped with `||`.
+- Backquote syntax is implemented, but `backquote` is not a primitive, you need to implement its semantics on yourselves.
 
 ## Evaluation
 Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
@@ -118,4 +119,4 @@ Note that there is no `lambda` primitive, an applicative expresson should be in 
 ```
 
 ## Request For Evaluations
-- [ ] Currently, mili does not have a complete virtual machine. Its stack is only used for protecting references from GC. That means, the evaluation of MILI is driven by C function recursion, and temporary variables are still stored on C function stack, which makes it hard to implement first-class continuation for it. To implement `call/cc`, the evaluation must be driven by iteration, so that the whole execution chain can be freezed by `freeze` as a list array. Compared to `call/cc`, something like racket's `shift` and `reset` may be better.
+- [ ] Currently, mili does not have a complete virtual machine. Its stack is only used for protecting references from GC. That means, the evaluation of MILI is driven by C function recursion, and temporary variables are still stored on C function stack, which makes it hard to implement first-class continuation for it. (Combining `freeze` and trampoline can also emulate continuation of control too some degree (but freezed C stack won't be released if the trampoline doesn't return) To implement `call/cc`, the evaluation must be driven by iteration, so that the whole execution chain can be freezed by `freeze` as a list array. Compared to `call/cc`, something like racket's `shift` and `reset` may be better.
