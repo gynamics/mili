@@ -15,8 +15,8 @@ typedef uintptr_t Ref;
 #define TAGPTR_BITS (64 - TAG_BITS)
 #define TAG_MASK (~0UL << TAGPTR_BITS)
 #define TAGPTR_MASK (~TAG_MASK)
-#define TAGTYPE_BITS 3
-#define TAGTYPE_MASK (TAG_MASK ^ (TAG_MASK << TAGTYPE_BITS))
+#define TYPE_BITS 3
+#define TYPE_MASK (TAG_MASK ^ (TAG_MASK << TYPE_BITS))
 typedef enum {
   REF_NIL,
   REF_LIST,
@@ -25,27 +25,28 @@ typedef enum {
   REF_ERROR,
 } RefType;
 
-static inline Ref makeRef(Ref ptr, RefType type) {
-  return (Ref)((ptr & ~TAGTYPE_MASK) | ((uintptr_t)type << TAGPTR_BITS));
+#define INLINE static inline
+INLINE Ref makeRef(Ref ptr, RefType type) {
+  return (Ref)((ptr & ~TYPE_MASK) | ((uintptr_t)type << TAGPTR_BITS));
 }
 
-static inline void *unRef(Ref ref) { return (void *)(ref & TAGPTR_MASK); }
+INLINE void *unRef(Ref ref) { return (void *)(ref & TAGPTR_MASK); }
 
 #define STACK_SIZE 1024
-static volatile Ref fret; // function return value
+static Ref fret; // function return value
 static Ref stack[STACK_SIZE];
 static int sp;
-static inline void miliPush(Ref v) { stack[++sp] = v; }
-static inline Ref miliPop() { return stack[--sp]; }
+INLINE void miliPush(Ref v) { stack[++sp] = v; }
+INLINE Ref miliPop() { return stack[--sp]; }
 #define V(n) stack[sp - n]
-static inline Ref miliCall_1(void (*f)(), Ref a0) {
+INLINE Ref miliCall_1(void (*f)(), Ref a0) {
   return miliPush(a0), f(), miliPop(), fret;
 }
-static inline Ref miliCall_2(void (*f)(), Ref a0, Ref a1) {
+INLINE Ref miliCall_2(void (*f)(), Ref a0, Ref a1) {
   miliPush(a1), miliPush(a0), f();
   return miliPop(), miliPop(), fret;
 }
-static inline Ref miliCall_3(void (*f)(), Ref a0, Ref a1, Ref a2) {
+INLINE Ref miliCall_3(void (*f)(), Ref a0, Ref a1, Ref a2) {
   miliPush(a2), miliPush(a1), miliPush(a0), f();
   return miliPop(), miliPop(), miliPop(), fret;
 }
@@ -56,7 +57,7 @@ typedef enum {
 } ErrType;
 
 Ref miliPrint(Ref exp);
-static inline Ref errRef(ErrType err, char *errname, int n) {
+INLINE Ref errRef(ErrType err, char *errname, int n) {
   printf("Error %s @ line %d\n", errname, n);
   printf("Call Trace:\n");
   for (int i = sp; i > 0 && sp - i < 8; i--)
@@ -65,11 +66,11 @@ static inline Ref errRef(ErrType err, char *errname, int n) {
 }
 #define ERRREF(err) errRef(err, #err, __LINE__)
 
-static inline RefType getRefType(Ref ref) {
-  return (RefType)((ref & TAGTYPE_MASK) >> (TAGPTR_BITS));
+INLINE RefType getRefType(Ref ref) {
+  return (RefType)((ref & TYPE_MASK) >> (TAGPTR_BITS));
 }
 
-static inline int testRefType(Ref ref, RefType type) {
+INLINE int testRefType(Ref ref, RefType type) {
   return (getRefType(ref) == type);
 }
 #define NIL_P(ref) testRefType(ref, REF_NIL)
@@ -109,24 +110,24 @@ Ref miliCdr(Ref x) {
   }
 }
 
-#define TAGMARK_BITS 2
-#define TAGMARK_OFFSET (TAGPTR_BITS + TAGTYPE_BITS)
-#define TAGMARK_MASK (TAG_MASK << TAGTYPE_BITS)
+#define MARK_BITS 2
+#define MARK_OFFSET (TAGPTR_BITS + TYPE_BITS)
+#define MARK_MASK (TAG_MASK << TYPE_BITS)
 typedef enum {
   MARK_00,
   MARK_01,
   MARK_10,
   MARK_11,
 } MarkType;
-static inline void setMark(List l, MarkType m) {
-  l->car = ((l->car & ~TAGMARK_MASK) | ((uintptr_t)m << TAGMARK_OFFSET));
+INLINE void setMark(List l, MarkType m) {
+  l->car = ((l->car & ~MARK_MASK) | ((uintptr_t)m << MARK_OFFSET));
 }
 #define HEAP_SIZE 4096
 static Node heap[HEAP_SIZE];
 static volatile List freelist;
-static inline size_t heapPos(Ref x) { return LIST(x) - heap; }
+INLINE size_t heapPos(Ref x) { return LIST(x) - heap; }
 int testMark(int x, MarkType m) {
-  return (((uintptr_t)heap[x].car >> TAGMARK_OFFSET) == m);
+  return (((uintptr_t)heap[x].car >> MARK_OFFSET) == m);
 }
 /** 00 => no ref; 01 => strong ref; 11 => weak ref */
 void markTree(Ref x) {
@@ -192,7 +193,7 @@ typedef enum {
 
 static char *symtbl[1024];
 static int symcnt;
-static inline char *miliSymbolName(Ref id) { return symtbl[UINT(id)]; }
+INLINE char *miliSymbolName(Ref id) { return symtbl[UINT(id)]; }
 Ref miliIntern(char *s) {
   for (int i = 0; i < symcnt; ++i)
     if (strcmp(s, symtbl[i]) == 0)
@@ -264,7 +265,7 @@ void _miliEval() {
   printf("{%d} => ", --d), miliPrint(fret), printf("\n");
 #endif
 }
-Ref miliEval(Ref exp) { return miliCall_1(_miliEval, exp), fret; }
+INLINE Ref miliEval(Ref exp) { return miliCall_1(_miliEval, exp), fret; }
 
 void _miliSet() {
 #define key V(0)
@@ -402,7 +403,6 @@ void _miliApply() {
 #undef l
 #undef f
 }
-Ref miliApply(Ref f, Ref args) { return miliCall_2(_miliApply, f, args), fret; }
 
 Ref miliEqual(Ref x, Ref y);
 void _miliEqual() {
