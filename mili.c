@@ -32,40 +32,6 @@ INLINE Ref makeRef(Ref ptr, RefType type) {
 
 INLINE void *unRef(Ref ref) { return (void *)(ref & TAGPTR_MASK); }
 
-#define STACK_SIZE 1024
-static Ref fret; // function return value
-static Ref stack[STACK_SIZE];
-static int sp;
-INLINE void miliPush(Ref v) { stack[++sp] = v; }
-INLINE Ref miliPop() { return stack[--sp]; }
-#define V(n) stack[sp - n]
-INLINE Ref miliCall_1(void (*f)(), Ref a0) {
-  return miliPush(a0), f(), miliPop(), fret;
-}
-INLINE Ref miliCall_2(void (*f)(), Ref a0, Ref a1) {
-  miliPush(a1), miliPush(a0), f();
-  return miliPop(), miliPop(), fret;
-}
-INLINE Ref miliCall_3(void (*f)(), Ref a0, Ref a1, Ref a2) {
-  miliPush(a2), miliPush(a1), miliPush(a0), f();
-  return miliPop(), miliPop(), miliPop(), fret;
-}
-
-typedef enum {
-  ERR_EVAL,
-  ERR_TYPE,
-} ErrType;
-
-Ref miliPrint(Ref exp);
-INLINE Ref errRef(ErrType err, char *errname, int n) {
-  printf("Error %s @ line %d\n", errname, n);
-  printf("Call Trace:\n");
-  for (int i = sp; i > 0 && sp - i < 8; i--)
-    printf("%d: ", i), miliPrint(stack[i]), printf("\n");
-  return (Ref)(((uintptr_t)REF_ERROR << TAGPTR_BITS) | (uintptr_t)err);
-}
-#define ERRREF(err) errRef(err, #err, __LINE__)
-
 INLINE RefType getRefType(Ref ref) {
   return (RefType)((ref & TYPE_MASK) >> (TAGPTR_BITS));
 }
@@ -87,6 +53,32 @@ typedef struct {
 #define CAR(ref) (LIST(ref)->car)
 #define CDR(ref) (LIST(ref)->cdr)
 #define UINT(ref) ((unsigned long)unRef(ref))
+
+#define STACK_SIZE 1024
+static Ref fret; // function return value
+static Ref stack[STACK_SIZE];
+static int sp;
+INLINE void miliPush(Ref v) { stack[++sp] = v; }
+INLINE void miliPop(int n) {
+  while (n-- > 0)
+    stack[sp--] = NIL;
+}
+#define V(n) stack[sp - n]
+
+typedef enum {
+  ERR_EVAL,
+  ERR_TYPE,
+} ErrType;
+
+INLINE Ref miliPrint(Ref exp);
+INLINE Ref errRef(ErrType err, char *errname, int n) {
+  printf("Error %s @ line %d\n", errname, n);
+  printf("Call Trace:\n");
+  for (int i = sp; i > 0 && sp - i < 8; i--)
+    printf("%d: ", i), miliPrint(stack[i]), printf("\n");
+  return (Ref)(((uintptr_t)REF_ERROR << TAGPTR_BITS) | (uintptr_t)err);
+}
+#define ERRREF(err) errRef(err, #err, __LINE__)
 
 Ref miliCar(Ref x) {
   switch (getRefType(x)) {
@@ -155,13 +147,14 @@ void miliGC() {
   markTree(ENV);
   for (int i = sp; i >= 0; --i)
     markTree(stack[i]);
-  for (int i = 0; i < HEAP_SIZE; i++)
-    if (!testMark(i, MARK_00)) { // recycle nodes
-      heap[i].cdr = (Ref)freelist;
-      freelist = &heap[i];
+  for (int i = 1; i < HEAP_SIZE; i++)
+    if (testMark(i, MARK_00)) { // recycle nodes
 #ifdef DEBUG
       ++count;
+      printf("Collect node #%d\n", i);
 #endif
+      heap[i].cdr = (Ref)freelist;
+      freelist = &heap[i];
     } else
       setMark((List)&heap[i], MARK_00);
 #ifdef DEBUG
@@ -169,16 +162,15 @@ void miliGC() {
 #endif
 }
 
-void _miliCons() {
+Ref miliCons(Ref car, Ref cdr) {
   if (freelist == NIL) // freelist expired, trigger GC
     miliGC();
   List x = freelist;
   freelist = (List)freelist->cdr;
-  x->car = V(0);
-  x->cdr = V(1);
-  fret = makeRef((Ref)x, REF_LIST);
+  x->car = car;
+  x->cdr = cdr;
+  return makeRef((Ref)x, REF_LIST);
 }
-Ref miliCons(Ref car, Ref cdr) { return miliCall_2(_miliCons, car, cdr), fret; }
 
 typedef enum {
   SYM_backquote,
@@ -232,9 +224,8 @@ Ref miliGet(Ref key) {
     return p;
 }
 
-void _miliApply();
-void _miliEval() {
-#define exp V(0)
+Ref miliApply(Ref exp);
+Ref miliEval(Ref exp) {
 #ifdef DEBUG
   static int d = 0;
   printf("Eval{%d} ", d++), miliPrint(exp);
@@ -246,10 +237,7 @@ void _miliEval() {
     fret = NIL;
     break;
   case REF_LIST:
-    if (NIL_P(CAR(exp)))
-      fret = NIL; // () => nil
-    else
-      miliCall_2(_miliApply, CAR(exp), CDR(exp));
+    fret = NIL_P(CAR(exp)) ? NIL : miliApply(exp);
     break;
   case REF_SYMBOL:
     fret = miliCdr(miliGet(exp));
@@ -264,89 +252,86 @@ void _miliEval() {
 #ifdef DEBUG
   printf("{%d} => ", --d), miliPrint(fret), printf("\n");
 #endif
+  return fret;
 }
-INLINE Ref miliEval(Ref exp) { return miliCall_1(_miliEval, exp), fret; }
 
-void _miliSet() {
-#define key V(0)
-#define value V(1)
+Ref miliSet(Ref key, Ref value) {
   if (!testRefType(key, REF_SYMBOL))
     fret = ERRREF(ERR_TYPE);
   else {
     Ref cell = miliGetTemp(key);
-    if (NIL_P(cell))
-      CDR(ENV) = miliCons(miliCons(key, value), CDR(ENV));
-    else
+    if (NIL_P(cell)) {
+      miliPush(miliCons(key, value));
+      CDR(ENV) = miliCons(V(0), CDR(ENV));
+      miliPop(1);
+    } else
       CDR(cell) = value;
     fret = value;
   }
-#undef key
-#undef value
-}
-Ref miliSet(Ref key, Ref value) {
-  return miliCall_2(_miliSet, key, value), fret;
+  return fret;
 }
 
-void _miliDefine() {
-#define key V(0)
-#define value V(1)
-#define mut V(2)
+Ref miliDefine(Ref key, Ref value, Ref mut) {
   if (!testRefType(key, REF_SYMBOL))
     fret = ERRREF(ERR_TYPE);
   else {
     Ref cell = miliGetLocal(key);
     if (NIL_P(cell)) {
-      CAR(CAR(ENV)) = miliCons(miliCons(key, value), CAR(CAR(ENV)));
+      miliPush(miliCons(key, value));
+      CAR(CAR(ENV)) = miliCons(V(0), CAR(CAR(ENV)));
+      miliPop(1);
       fret = value;
     } else if (NIL_P(mut))
       fret = CDR(cell);
     else
       fret = (CDR(cell) = value);
   }
-#undef key
-#undef value
-#undef mut
-}
-Ref miliDefine(Ref key, Ref value, Ref mut) {
-  return miliCall_3(_miliDefine, key, value, mut), fret;
+  return fret;
 }
 
-void _miliFreeze() {
-  miliPush(NIL);
-#define head V(0)
-#define scope V(1)
-  head = miliCons(NIL, NIL);
-  Ref r = head;
+Ref miliFreeze(Ref scope) {
+  CAR(ENV) = miliCons(NIL, CAR(ENV));
   for (Ref p = CAR(ENV); p != scope; p = CDR(p))
-    for (Ref q = CAR(p); LIST_P(q); q = CDR(q)) {
-      Ref b = CAR(q);
-      // duplicate bindings are not removed but left behind
-      CDR(r) = miliCons(miliCons(CAR(b), CDR(b)), NIL);
-      r = CDR(r);
-    }
-  fret = CDR(head);
-#undef head
-#undef scope
-  miliPop(); // head
+    for (Ref q = CAR(p); LIST_P(q); q = CDR(q))
+      miliDefine(CAR(CAR(q)), CDR(CAR(q)), T);
+  fret = CAR(CAR(ENV));
+  CAR(ENV) = CDR(CAR(ENV));
+  return fret;
 }
-Ref miliFreeze(Ref scope) { return miliCall_1(_miliFreeze, scope), fret; }
 
-void _miliApply() {
+Ref mili_list(Ref exp) {
+  Ref head = miliCons(NIL, NIL);
+  miliPush(head);
+  miliPush(exp);
   miliPush(NIL);
-  miliPush(NIL);
-  miliPush(NIL);
+#define x V(0)
+  Ref p = exp;
+  Ref q = head;
+  for (; LIST_P(p); p = CDR(p)) {
+    x = miliEval(miliCar(p));
+    CDR(q) = miliCons(x, NIL);
+    q = CDR(q);
+  }
+  CDR(q) = miliEval(p); // dotted pair
+#undef x
+  miliPop(3);
+  return CDR(head);
+}
+
+Ref miliApply(Ref exp) {
+  sp += 4;
 #define f V(0)
 #define l V(1)
 #define x V(2)
-#define fexp V(3)
-#define args V(4)
+#define r V(3)
+  f = miliEval(miliCar(exp));
+  l = miliCdr(exp);
 #ifdef DEBUG
-  printf("Apply "), miliPrint(fexp), printf(" "), miliPrint(args), printf("\n");
+  printf("Apply "), miliPrint(miliCar(exp)), printf(" "), miliPrint(l), printf("\n");
 #endif
-  f = miliEval(fexp);
   switch (getRefType(f)) {
   case REF_ADDR:
-    fret = ((Ref (*)(Ref))unRef(f))(args);
+    fret = ((Ref (*)(Ref))unRef(f))(l);
     break;
   case REF_LIST: {
     if (!LIST_P(f) || !LIST_P(CAR(f)) ||
@@ -355,17 +340,9 @@ void _miliApply() {
       break;
     }
     int ftype = UINT(CAR(CAR(f)));
-    Ref p, q, r;
-    if (ftype != SYM_m) { // if it is not a macro, evaluate arguments first
-      l = miliCons(NIL, NIL);
-      for (p = l, q = args; LIST_P(q); p = CDR(p), q = CDR(q)) {
-        x = miliEval(CAR(q));
-        CDR(p) = miliCons(x, NIL);
-      }
-      if (!NIL_P(q))
-        CDR(p) = miliEval(q);
-      args = CDR(l);
-    }
+    Ref p, q;
+    if (ftype != SYM_m) // if it is not a macro, evaluate arguments first
+      l = mili_list(l);
     r = CAR(ENV);
     if (ftype == SYM_t) { // trampoline
       if (CDR(f))
@@ -377,7 +354,7 @@ void _miliApply() {
         miliDefine(CAR(CAR(p)), CDR(CAR(p)), NIL);
     }
     /* dynamic bindings */
-    for (p = miliCar(CDR(CAR(f))), q = args; LIST_P(p) && LIST_P(q);
+    for (p = miliCar(CDR(CAR(f))), q = l; LIST_P(p) && LIST_P(q);
          p = CDR(p), q = CDR(q))
       miliDefine(CAR(p), CAR(q), T);
     if (!NIL_P(p)) // dotted pairs?
@@ -394,20 +371,15 @@ void _miliApply() {
     fret = ERRREF(ERR_TYPE);
     break;
   }
-  miliPop(); // x
-  miliPop(); // l
-  miliPop(); // f
-#undef fexp
-#undef args
+  miliPop(4);
+#undef r
 #undef x
 #undef l
 #undef f
+  return fret;
 }
 
-Ref miliEqual(Ref x, Ref y);
-void _miliEqual() {
-#define x V(0)
-#define y V(1)
+Ref miliEqual(Ref x, Ref y) {
   RefType type = getRefType(x);
   if (!testRefType(y, type))
     fret = NIL;
@@ -435,51 +407,10 @@ void _miliEqual() {
     default:
       fret = ERRREF(ERR_TYPE);
     };
-#undef x
-#undef y
-}
-Ref miliEqual(Ref x, Ref y) { return miliCall_2(_miliEqual, x, y), fret; }
-
-Ref mili_quote(Ref exp) { return miliCar(exp); }
-
-#define MILI_PRIM_1(name, f)                                                   \
-  Ref mili_##name(Ref exp) { return f(miliEval(miliCar(exp))); }
-
-MILI_PRIM_1(eval, miliEval)
-MILI_PRIM_1(car, miliCar)
-MILI_PRIM_1(cdr, miliCdr)
-MILI_PRIM_1(freeze, miliFreeze)
-
-#define MILI_PRIM_2(name, f)                                                   \
-  Ref mili_##name(Ref exp) {                                                   \
-    Ref arg1 = miliEval(miliCar(exp));                                         \
-    Ref arg2 = miliEval(miliCar(miliCdr(exp)));                                \
-    return f(arg1, arg2);                                                      \
-  }
-
-MILI_PRIM_2(equal, miliEqual)
-MILI_PRIM_2(cons, miliCons)
-
-Ref mili_set(Ref exp) {
-  miliPush(NIL), miliPush(NIL);
-  V(0) = miliEval(miliCar(exp));
-  V(1) = miliEval(miliCar(miliCdr(exp)));
-  _miliSet();
-  miliPop(), miliPop();
   return fret;
 }
 
-Ref mili_define(Ref exp) {
-  miliPush(NIL), miliPush(NIL), miliPush(NIL);
-  V(0) = miliEval(miliCar(exp));
-  V(1) = miliEval(miliCar(miliCdr(exp)));
-  V(2) = miliEval(miliCdr(miliCdr(exp)));
-  _miliDefine();
-  miliPop(), miliPop(), miliPop();
-  return fret;
-}
-
-Ref mili_atom(Ref exp) {
+Ref miliAtom(Ref exp) {
   Ref x = miliEval(miliCar(exp));
   switch (getRefType(x)) {
   case REF_NIL:
@@ -490,18 +421,45 @@ Ref mili_atom(Ref exp) {
   }
 }
 
-Ref mili_list(Ref exp) {
-  Ref head = miliCons(NIL, NIL);
-  miliPush(head);
-  Ref p = exp;
-  Ref q = head;
-  for (; LIST_P(p); p = CDR(p)) {
-    CDR(q) = miliCons(miliEval(miliCar(p)), NIL);
-    q = CDR(q);
+Ref mili_quote(Ref exp) { return miliCar(exp); }
+
+#define MILI_PRIM_1(name, f)                                                   \
+  Ref mili_##name(Ref exp) {                                                   \
+    ++sp;                                                                      \
+    V(0) = miliEval(miliCar(exp));                                             \
+    fret = f(V(0));                                                            \
+    miliPop(1);                                                                \
+    return fret;                                                               \
   }
-  CDR(q) = miliEval(p); // dotted pair
-  miliPop();
-  return CDR(head);
+
+MILI_PRIM_1(car, miliCar)
+MILI_PRIM_1(cdr, miliCdr)
+MILI_PRIM_1(atom, miliAtom)
+MILI_PRIM_1(eval, miliEval)
+MILI_PRIM_1(freeze, miliFreeze)
+
+#define MILI_PRIM_2(name, f)                                                   \
+  Ref mili_##name(Ref exp) {                                                   \
+    sp += 2;                                                                   \
+    V(0) = miliEval(miliCar(exp));                                             \
+    V(1) = miliEval(miliCar(miliCdr(exp)));                                    \
+    fret = f(V(0), V(1));                                                      \
+    miliPop(2);                                                                \
+    return fret;                                                               \
+  }
+
+MILI_PRIM_2(equal, miliEqual)
+MILI_PRIM_2(cons, miliCons)
+MILI_PRIM_2(set, miliSet)
+
+Ref mili_define(Ref exp) {
+  sp += 3;
+  V(0) = miliEval(miliCar(exp));
+  V(1) = miliEval(miliCar(miliCdr(exp)));
+  V(2) = miliEval(miliCdr(miliCdr(exp)));
+  fret = miliDefine(V(0), V(1), V(2));
+  miliPop(3);
+  return fret;
 }
 
 Ref mili_if(Ref exp) {
@@ -575,7 +533,7 @@ char *miliParse(char *line, List parent, int limit) {
       line++;
       line = miliParse(line, LIST(x), -1);
     } else if (*line == ')') {
-      return miliPop(), ++line;
+      return miliPop(1), ++line;
     } else {
       if (strchr(numleads, *line))
         x = makeRef((Ref)strtoul(line, &line, 0), REF_ADDR);
@@ -603,8 +561,8 @@ char *miliParse(char *line, List parent, int limit) {
       SHIFT(x);
     }
   }
+  miliPop(1);
 #undef x
-  miliPop();
   return line;
 }
 
@@ -663,9 +621,11 @@ Ref miliPrintValue(Ref value) {
   return NIL;
 }
 
-Ref miliPrint(Ref value) { return markTree(value), miliPrintValue(value); }
+INLINE Ref miliPrint(Ref value) {
+  return markTree(value), miliPrintValue(value);
+}
 
-void miliPrimitive(char *name, Ref (*f)(Ref)) {
+INLINE void miliPrimitive(char *name, Ref (*f)(Ref)) {
   miliSet(miliIntern(name), makeRef((Ref)f, REF_ADDR));
 }
 
