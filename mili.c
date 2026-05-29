@@ -492,7 +492,20 @@ Ref mili_div(Ref exp) { MILI_ARITHMETICS(/); }
 static const char reschars[] = " \v\t\n.()";
 static const char numleads[] = "0123456789";
 static const char wsp[] = " \v\t\n";
-char *miliParse(char *line, List parent, int limit) {
+static int parser_depth = 0;
+static char *parser_line = NULL;
+static char *line = NULL;
+
+void miliReadLine(char *prompt) {
+  size_t n = 0;
+  printf("\n%s", prompt);
+  if (getline(&parser_line, &n, stdin) < 0)
+    exit(0);
+  line = parser_line;
+}
+
+int miliParse(List parent, int limit) {
+  ++parser_depth;
   miliPush(NIL);
 #define x V(0)
 #define SHIFT(v)                                                               \
@@ -504,16 +517,21 @@ char *miliParse(char *line, List parent, int limit) {
     parent->car = v;                                                           \
   })
 
-  while (*line != '\0' && limit-- != 0) {
+  while (limit-- != 0) {
     while (*line != '\0' && strchr(wsp, *line))
       line++;
-    if (*line == '\0')
-      break;
-    else if (*line == '`') {
+    if (*line == '\0') {
+      if (parser_depth > 1 || limit < 0) {
+        // Not a termination state, feed the line
+        free(parser_line);
+        miliReadLine("> ");
+      } else
+        break;
+    } else if (*line == '`') {
       x = miliCons(makeRef((Ref)SYM_backquote, REF_SYMBOL), NIL);
       SHIFT(x);
       line++;
-      line = miliParse(line, LIST(x), 1);
+      miliParse(LIST(x), 1);
     } else if (*line == ',') {
       SHIFT(makeRef((Ref)SYM_comma, REF_SYMBOL));
       line++;
@@ -521,19 +539,22 @@ char *miliParse(char *line, List parent, int limit) {
       x = miliCons(makeRef((Ref)SYM_quote, REF_SYMBOL), NIL);
       SHIFT(x);
       line++;
-      line = miliParse(line, LIST(x), 1);
+      miliParse(LIST(x), 1);
     } else if (*line == '.') {
       x = miliCons(NIL, NIL);
       line++;
-      line = miliParse(line, LIST(x), 1);
+      miliParse(LIST(x), 1);
       parent->cdr = CAR(x);
     } else if (*line == '(') {
       x = miliCons(NIL, NIL);
       SHIFT(x);
       line++;
-      line = miliParse(line, LIST(x), -1);
+      miliParse(LIST(x), -1);
     } else if (*line == ')') {
-      return miliPop(1), ++line;
+      --parser_depth;
+      line++;
+      miliPop(1);
+      return 0;
     } else {
       if (strchr(numleads, *line))
         x = makeRef((Ref)strtoul(line, &line, 0), REF_ADDR);
@@ -563,19 +584,8 @@ char *miliParse(char *line, List parent, int limit) {
   }
   miliPop(1);
 #undef x
-  return line;
-}
-
-Ref miliReadLine() {
-  char *line = NULL;
-  size_t n;
-  printf("\n\n(mili) ");
-  if (getline(&line, &n, stdin) < 0)
-    exit(0);
-  Node root = {NIL, NIL};
-  miliParse(line, &root, -1);
-  free(line);
-  return root.car;
+  --parser_depth;
+  return 0;
 }
 
 Ref miliPrintValue(Ref value);
@@ -669,7 +679,12 @@ int main(int argc, char *argv[]) {
   miliPrimitive("*", mili_mul);
   miliPrimitive("/", mili_div);
   /* A simple REPL */
-  for (;;)
-    miliPrint(miliEval(miliReadLine()));
+  for (;;) {
+    Node root = {NIL, NIL};
+    miliReadLine("\n(mili) ");
+    miliParse(&root, 1);
+    miliPrint(miliEval(root.car));
+    free(parser_line);
+  }
   return 0;
 }
