@@ -248,7 +248,6 @@ Ref miliEval(Ref exp) {
   default:
     fret = ERRREF(ERR_EVAL);
   }
-#undef exp
 #ifdef DEBUG
   printf("{%d} => ", --d), miliPrint(fret), printf("\n");
 #endif

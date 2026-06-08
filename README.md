@@ -17,7 +17,7 @@ gcc -o mili mili.c
 If you want to see the trace of evaluation/application, add `-DDEBUG` for enabling trace prints.
 
 ## Features
-- `getline`-based REPL, evaluate line by line, no waiting.
+- `getline`-based REPL, it evaluates the first complete sexp read in.
   For each line, only the first sexp is read and evaluated, following things will be neglected.
 - Use 5-bit pointer tagging (3 type bits, 2 mark bits).
 - Use C call stack for recursion, may overflow on very deep recursion.
@@ -32,11 +32,12 @@ If you want to see the trace of evaluation/application, add `-DDEBUG` for enabli
 - An address is a C numeral that accepted by `stdtoul`, we also use it for unsigned integers (only 57 bits available).
 - Otherwise it is a symbol
 - `( SEXP* )`for list construction
-- `' SEXP` for quote expression construction
+- `' SEXP` for quote expression construction, `' SEXP` is transformed to `(quote SEXP)`.
 - `. SEXP` for dotted pair construction
 - ` \v\t\n` for diliminators
 - Special symbols can be defined with `|...|` where `...` can contain arbitrary characters, a single `|` can be escaped with `||`.
-- Backquote syntax is implemented, but `backquote` is not a primitive, you need to implement its semantics on yourselves.
+- Backquote syntax is supported, ``` SEXP`` is transformed to `(backquote SEXP)`, symbol `,` is kept as it is.
+  Currently `backquote` and `comma` does not have build-in semantics implemented, if you want to use this feature, you will need to implement its semantics on yourself.
 
 ## Evaluation
 Mili has a mixed lexical/dynamic environment, which is mostly Scheme-style.
